@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Psychomotor Plate Balance Assessment</title>
+  <style>
+    /* ====== GLOBAL LAYOUT ====== */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #111;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #f5f5f5;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+
+    .top-bar {
+      width: 100%;
+      padding: 8px 20px;
+      box-sizing: border-box;
+      background: #181818;
+      border-bottom: 1px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 14px;
+    }
+
+    .title {
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    .timer {
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.04em;
+      color: #f8f8f8;
+    }
+
+    .status {
+      color: #aaa;
+      font-size: 12px;
+      text-align: right;
+      max-width: 320px;
+    }
+
+    .canvas-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+    }
+
+    canvas {
+      background: #151515;
+      border-radius: 10px;
+      box-shadow:
+        0 0 0 1px #222,
+        0 16px 40px rgba(0, 0, 0, 0.7);
+      max-width: 1100px;
+      max-height: 1100px;
+      width: 96vmin;
+      height: 96vmin;
+    }
+
+    /* ====== OVERLAYS ====== */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, rgba(255, 255, 255, 0.05), transparent 55%),
+                  rgba(0, 0, 0, 0.78);
+      z-index: 10;
+    }
+
+    .panel {
+      background: #141414;
+      border-radius: 8px;
+      padding: 24px 28px;
+      max-width: 520px;
+      width: calc(100% - 32px);
+      border: 1px solid #303030;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.8);
+    }
+
+    .panel h1 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      font-weight: 600;
+      color: #f1f1f1;
+    }
+
+    .panel h2 {
+      margin: 16px 0 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e0e0e0;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .panel p {
+      margin: 0 0 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #c8c8c8;
+    }
+
+    .panel ul {
+      margin: 4px 0 8px 18px;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #c8c8c8;
+    }
+
+    .panel li {
+      margin-bottom: 4px;
+    }
+
+    .panel .hint {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #999;
+    }
+
+    .panel .cta {
+      margin-top: 14px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #f5f5f5;
+    }
+
+    .result-main {
+      font-size: 26px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #fafafa;
+    }
+
+    .result-rating {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .rating-poor    { color: #ff6b6b; }
+    .rating-average { color: #f0c674; }
+    .rating-good    { color: #6ecf68; }
+    .rating-excellent { color: #7fd0ff; }
+
+    @media (max-width: 600px) {
+      .top-bar {
+        flex-wrap: wrap;
+        row-gap: 4px;
+      }
+      .status {
+        width: 100%;
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <div class="title">Psychomotor Stability Assessment</div>
+    <div class="timer" id="timerDisplay">Time: 100.0 s</div>
+    <div class="status" id="statusDisplay">Connect a joystick (Gamepad API). Mouse fallback is enabled.</div>
+  </div>
+
+  <div class="canvas-wrapper">
+    <canvas id="gameCanvas"></canvas>
+  </div>
+
+  <!-- AUTH OVERLAY (PASSWORD GATE BEFORE INSTRUCTIONS) -->
+  <div class="overlay" id="authOverlay">
+    <div class="panel">
+      <h1>Psychomotor Stability Assessment Login</h1>
+      <p>
+        Please enter the access password to begin the assessment.
+      </p>
+
+      <label for="authPasswordInput" style="display:block; font-size:13px; margin:12px 0 4px; color:#d4d4d4;">
+        Password
+      </label>
+      <input
+        id="authPasswordInput"
+        type="password"
+        autocomplete="off"
+        style="width:100%; box-sizing:border-box; padding:8px 10px; border-radius:4px; border:1px solid #444; background:#111; color:#f5f5f5; font-size:13px; outline:none;"
+      />
+
+      <button
+        id="authSubmitButton"
+        style="margin-top:10px; padding:8px 14px; border-radius:4px; border:none; background:#2563eb; color:#f9fafb; font-size:13px; font-weight:500; cursor:pointer;"
+      >
+        Login
+      </button>
+
+      <div
+        id="authError"
+        style="display:none; margin-top:8px; font-size:12px; color:#f97373;"
+      >
+        Invalid password
+      </div>
+
+      <p class="hint" style="margin-top:16px;">
+        This password check runs only in your browser and is not strong security.
+      </p>
+    </div>
+  </div>
+
+  <!-- INSTRUCTIONS OVERLAY -->
+  <div class="overlay" id="startOverlay" style="display:none;">
+    <div class="panel">
+      <h1>Plate Balance Task</h1>
+      <p>
+        Keep the ball as close as possible to the center <strong>X</strong> on a slippery circular plate.
+        Tilt the plate using a joystick (preferred) or mouse.
+      </p>
+
+      <h2>Controls</h2>
+      <ul>
+        <li><strong>Joystick</strong>: Move the left stick to tilt the plate.</li>
+        <li><strong>Mouse (fallback)</strong>: Move the mouse to indicate tilt direction.</li>
+      </ul>
+
+      <h2>Objective</h2>
+      <p>
+        Hold the ball within the small inner circle around the center. The game lasts exactly
+        <strong>100 seconds</strong>. Score is the total time the ball stays within this scoring zone.
+      </p>
+
+      <p class="hint">
+        The plate is auto-leveling and unstable: it will try to return to flat, with background noise and
+        sudden random disturbances.
+      </p>
+
+      <p class="cta">Press any key, click, or press a joystick button to begin.</p>
+    </div>
+  </div>
+
+  <!-- END SCREEN OVERLAY -->
+  <div class="overlay" id="endOverlay" style="display:none;">
+    <div class="panel" id="endPanel">
+      <h1>Trial Complete</h1>
+      <div class="result-main" id="finalScoreText">Score: 0.00 s</div>
+      <div class="result-rating" id="finalRatingText"></div>
+      <p id="ratingDetailText"></p>
+      <p class="hint">Reload the page to run another trial.</p>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // CONFIGURATION CONSTANTS (AFFECTING DIFFICULTY / REALISM)
+    // ============================================================
+
+    // PASSWORD: Change this value to update the access password
+    const AUTH_PASSWORD = 'adamhensem28';
+
+    // Physics & control tuning
+    const FRICTION = 0.9;              // Higher = stronger damping, slower ball; lower = more slippery
+    const TILT_SENSITIVITY = 650;      // Scales how strongly tilt accelerates the ball
+    const AUTO_LEVEL_STRENGTH = 3.5;   // How quickly the plate returns toward flat when no input
+    const DISTURBANCE_INTENSITY = 85;  // Magnitude of continuous random noise
+    const DISTURBANCE_NUDGE_INTENSITY = 260; // Magnitude of occasional sudden nudge impulses
+    const DISTURBANCE_NUDGE_MIN_INTERVAL = 3.0; // Min seconds between big nudges
+    const DISTURBANCE_NUDGE_MAX_INTERVAL = 7.5; // Max seconds between big nudges
+
+    const DEADZONE = 0.18;             // Joystick deadzone radius (0..1) – small but noticeable
+
+    const GAME_DURATION = 100.0;       // Seconds of active play
+
+    // Visual-only maximum plate tilt angle (in degrees) for 3D effect
+    const MAX_PLATE_TILT_DEG = 12;
+
+    // Radii as fractions of plate radius
+    const BALL_RADIUS_FRACTION = 0.06;
+    const SCORING_RADIUS_FRACTION = 0.13;
+
+    // ============================================================
+    // CANVAS & GEOMETRY SETUP
+    // ============================================================
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let plateRadius = 0;
+    let ballRadius = 0;
+    let scoringRadius = 0;
+    let centerX = 0;
+    let centerY = 0;
+
+    function resizeCanvas() {
+      // Make canvas square based on available space
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.min(rect.width, rect.height);
+      const pixelRatio = window.devicePixelRatio || 1;
+
+      canvas.width = size * pixelRatio;
+      canvas.height = size * pixelRatio;
+
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+
+      centerX = size / 2;
+      centerY = size / 2;
+      // Slightly larger plate radius to better fill the visible game area.
+      plateRadius = size * 0.42;
+      ballRadius = plateRadius * BALL_RADIUS_FRACTION;
+      scoringRadius = plateRadius * SCORING_RADIUS_FRACTION;
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ============================================================
+    // GAME STATE
+    // ============================================================
+
+    let gameRunning = false;
+    let gameEnded = false;
+    let authPassed = false; // becomes true after correct password
+    let timeRemaining = GAME_DURATION;
+    let scoreTime = 0; // cumulative seconds inside scoring zone
+
+    // Ball state (plate-local coordinates with origin at plate center)
+    let ballPos = { x: 0, y: 0 };
+    let ballVel = { x: 0, y: 0 };
+
+    // Plate tilt vector (conceptually like a 2D "pitch/roll" direction)
+    let tilt = { x: 0, y: 0 };
+
+    // Disturbance state
+    let nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+
+    // Input state
+    let usingGamepad = false;
+    let mouseVector = { x: 0, y: 0 };
+    let mouseActive = false;
+
+    // Timing
+    let lastTimestamp = null;
+
+    const timerDisplay = document.getElementById('timerDisplay');
+    const statusDisplay = document.getElementById('statusDisplay');
+
+    // ============================================================
+    // INPUT: GAMEPAD HANDLING
+    // ============================================================
+
+    window.addEventListener('gamepadconnected', (e) => {
+      usingGamepad = true;
+      statusDisplay.textContent = 'Joystick detected (Gamepad API active). Mouse fallback is available.';
+    });
+
+    window.addEventListener('gamepaddisconnected', (e) => {
+      usingGamepad = false;
+      statusDisplay.textContent = 'Joystick disconnected. Mouse fallback is active.';
+    });
+
+    function getGamepadTilt() {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[0];
+      if (!gp) {
+        usingGamepad = false;
+        return { x: 0, y: 0 };
+      }
+
+      // Use left stick axes [0, 1]
+      const rawX = gp.axes[0] || 0;
+      const rawY = gp.axes[1] || 0;
+
+      // Apply circular deadzone
+      const mag = Math.hypot(rawX, rawY);
+      if (mag < DEADZONE) {
+        return { x: 0, y: 0 };
+      }
+
+      // Rescale so that value just outside deadzone maps to ~0
+      const normMag = (mag - DEADZONE) / (1 - DEADZONE);
+      const scale = normMag / (mag || 1); // avoid divide by zero
+      return {
+        x: rawX * scale,
+        y: rawY * scale
+      };
+    }
+
+    // ============================================================
+    // INPUT: MOUSE FALLBACK
+    // ============================================================
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const dx = mx - rect.width / 2;
+      const dy = my - rect.height / 2;
+      const len = Math.hypot(dx, dy);
+
+      // Map mouse position to a tilt vector whose magnitude depends on
+      // distance from the center. Close to the center = gentle tilt,
+      // near the edge = maximum tilt. This feels more natural than
+      // always using full-strength tilt in the direction of the mouse.
+      if (len > 0) {
+        const maxLen = Math.min(rect.width, rect.height) / 2;
+        const mag = Math.min(len / maxLen, 1); // 0..1
+        mouseVector.x = (dx / len) * mag;
+        mouseVector.y = (dy / len) * mag;
+        mouseActive = true;
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      mouseActive = false;
+    });
+
+    // Allow click anywhere to start
+    window.addEventListener('mousedown', maybeStartGame);
+    window.addEventListener('keydown', maybeStartGame);
+
+    // Optionally start via any gamepad button
+    function pollGamepadStart() {
+      if (gameRunning || gameEnded) return;
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[0];
+      if (gp) {
+        usingGamepad = true;
+        const pressed = gp.buttons.some(btn => btn.pressed);
+        if (pressed) {
+          startGame();
+        }
+      }
+    }
+
+    // ============================================================
+    // GAME CONTROL
+    // ============================================================
+
+    const authOverlay = document.getElementById('authOverlay');
+    const authPasswordInput = document.getElementById('authPasswordInput');
+    const authSubmitButton = document.getElementById('authSubmitButton');
+    const authError = document.getElementById('authError');
+
+    const startOverlay = document.getElementById('startOverlay');
+    const endOverlay = document.getElementById('endOverlay');
+    const finalScoreText = document.getElementById('finalScoreText');
+    const finalRatingText = document.getElementById('finalRatingText');
+    const ratingDetailText = document.getElementById('ratingDetailText');
+
+    function maybeStartGame() {
+      // Block game start until password gate is passed.
+      if (!authPassed) return;
+      if (!gameRunning && !gameEnded) {
+        startGame();
+      }
+    }
+
+    function startGame() {
+      gameRunning = true;
+      gameEnded = false;
+      timeRemaining = GAME_DURATION;
+      scoreTime = 0;
+      ballPos = { x: 0, y: 0 };
+      ballVel = { x: 0, y: 0 };
+      tilt = { x: 0, y: 0 };
+      nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+      startOverlay.style.display = 'none';
+      statusDisplay.textContent = usingGamepad
+        ? 'Active input: joystick (left stick).'
+        : 'Active input: mouse tilt.';
+      lastTimestamp = null;
+    }
+
+    function endGame() {
+      gameRunning = false;
+      gameEnded = true;
+
+      const finalSeconds = scoreTime.toFixed(2);
+      finalScoreText.textContent = `Score: ${finalSeconds} s`;
+
+      const ratingInfo = evaluatePerformance(scoreTime);
+      finalRatingText.textContent = ratingInfo.label;
+      finalRatingText.className = 'result-rating ' + ratingInfo.cssClass;
+      ratingDetailText.textContent = ratingInfo.detail;
+
+      endOverlay.style.display = 'flex';
+    }
+
+    // ------------------------------------------------------------
+    // SIMPLE PASSWORD GATE
+    // ------------------------------------------------------------
+
+    function showAuthError() {
+      if (authError) {
+        authError.style.display = 'block';
+      }
+    }
+
+    function clearAuthError() {
+      if (authError) {
+        authError.style.display = 'none';
+      }
+    }
+
+    function handleAuthSubmit() {
+      if (!authPasswordInput) return;
+      const value = authPasswordInput.value || '';
+      if (value === AUTH_PASSWORD) {
+        authPassed = true;
+        clearAuthError();
+        authPasswordInput.value = '';
+        if (authOverlay) authOverlay.style.display = 'none';
+        if (startOverlay) startOverlay.style.display = 'flex';
+        // After auth, focus stays on the page and the existing
+        // start screen interaction works as before.
+      } else {
+        showAuthError();
+        authPasswordInput.value = '';
+        authPasswordInput.focus();
+      }
+    }
+
+    function evaluatePerformance(score) {
+      // Simple performance thresholds based on total "on target" time
+      const proportion = score / GAME_DURATION;
+      if (proportion < 0.25) {
+        return {
+          label: 'Poor',
+          cssClass: 'rating-poor',
+          detail: 'The ball spent little time in the target zone. Control was unstable.'
+        };
+      } else if (proportion < 0.5) {
+        return {
+          label: 'Average',
+          cssClass: 'rating-average',
+          detail: 'Moderate control. There is room for improved stability and precision.'
+        };
+      } else if (proportion < 0.75) {
+        return {
+          label: 'Good',
+          cssClass: 'rating-good',
+          detail: 'Good stability with frequent time in the target zone.'
+        };
+      } else {
+        return {
+          label: 'Excellent',
+          cssClass: 'rating-excellent',
+          detail: 'Excellent continuous control. The ball was kept near the center for most of the trial.'
+        };
+      }
+    }
+
+    // ============================================================
+    // UTILS
+    // ============================================================
+
+    function randomRange(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    // Setup auth UI interactions once DOM is ready
+    window.addEventListener('load', () => {
+      if (authPasswordInput) {
+        authPasswordInput.focus();
+        authPasswordInput.addEventListener('input', clearAuthError);
+        authPasswordInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            handleAuthSubmit();
+          }
+        });
+      }
+      if (authSubmitButton) {
+        authSubmitButton.addEventListener('click', handleAuthSubmit);
+      }
+    });
+
+    // ============================================================
+    // MAIN UPDATE LOOP
+    // ============================================================
+
+    function update(dt) {
+      if (!gameRunning) {
+        // Still allow subtle idle animation / tilt auto-level
+        tilt.x += (-tilt.x) * Math.min(1, AUTO_LEVEL_STRENGTH * dt);
+        tilt.y += (-tilt.y) * Math.min(1, AUTO_LEVEL_STRENGTH * dt);
+        return;
+      }
+
+      // --- INPUT: gamepad vs mouse ---
+      let inputTilt = { x: 0, y: 0 };
+      if (navigator.getGamepads) {
+        const padTilt = getGamepadTilt();
+        if (Math.hypot(padTilt.x, padTilt.y) > 0) {
+          inputTilt = padTilt;
+          usingGamepad = true;
+        } else if (mouseActive) {
+          usingGamepad = false;
+          inputTilt = mouseVector;
+        }
+      } else if (mouseActive) {
+        usingGamepad = false;
+        inputTilt = mouseVector;
+      }
+
+      // Status text (kept minimal)
+      // (Do not spam DOM every frame; only occasional updates could be added if desired.)
+
+      // --- PLATE AUTO-LEVEL + INPUT BLEND ---
+      // Tilt is pulled toward both the input direction and the "flat" (0,0) orientation.
+      const targetTiltX = inputTilt.x;
+      const targetTiltY = inputTilt.y;
+
+      // Move tilt toward target input
+      const tiltLerp = 10 * dt; // responsiveness of plate to user tilt
+      tilt.x += (targetTiltX - tilt.x) * Math.min(1, tiltLerp);
+      tilt.y += (targetTiltY - tilt.y) * Math.min(1, tiltLerp);
+
+      // Auto-level towards flat (0,0)
+      tilt.x += (-tilt.x) * Math.min(1, AUTO_LEVEL_STRENGTH * dt);
+      tilt.y += (-tilt.y) * Math.min(1, AUTO_LEVEL_STRENGTH * dt);
+
+      // --- RANDOM DISTURBANCES ---
+      // Continuous subtle instability (small noise each frame)
+      const noiseScale = DISTURBANCE_INTENSITY * dt;
+      const noiseAngle = Math.random() * Math.PI * 2;
+      ballVel.x += Math.cos(noiseAngle) * noiseScale * 0.02;
+      ballVel.y += Math.sin(noiseAngle) * noiseScale * 0.02;
+
+      // Occasional sudden nudge impulses
+      nextNudgeIn -= dt;
+      if (nextNudgeIn <= 0) {
+        const nAngle = Math.random() * Math.PI * 2;
+        const nMag = DISTURBANCE_NUDGE_INTENSITY;
+        ballVel.x += Math.cos(nAngle) * nMag;
+        ballVel.y += Math.sin(nAngle) * nMag;
+        nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+      }
+
+      // --- BALL PHYSICS ---
+      // Acceleration from plate tilt: ball slides "downhill"
+      const accelX = tilt.x * TILT_SENSITIVITY;
+      const accelY = tilt.y * TILT_SENSITIVITY;
+
+      ballVel.x += accelX * dt;
+      ballVel.y += accelY * dt;
+
+      // Apply friction (slippery surface = high velocity retention)
+      const frictionFactor = Math.exp(-FRICTION * dt);
+      ballVel.x *= frictionFactor;
+      ballVel.y *= frictionFactor;
+
+      // Integrate motion
+      ballPos.x += ballVel.x * dt;
+      ballPos.y += ballVel.y * dt;
+
+      // --- PLATE BOUNDARY CONSTRAINT ---
+      const maxR = plateRadius - ballRadius;
+      const dist = Math.hypot(ballPos.x, ballPos.y);
+      if (dist > maxR && dist > 0) {
+        // Clamp position to edge
+        const nx = ballPos.x / dist;
+        const ny = ballPos.y / dist;
+        ballPos.x = nx * maxR;
+        ballPos.y = ny * maxR;
+
+        // Remove outward radial component of velocity to "slide" along edge without bounce
+        const vDotN = ballVel.x * nx + ballVel.y * ny;
+        if (vDotN > 0) {
+          ballVel.x -= vDotN * nx;
+          ballVel.y -= vDotN * ny;
+        }
+      }
+
+      // --- SCORING & TIMER ---
+      timeRemaining -= dt;
+      if (timeRemaining < 0) timeRemaining = 0;
+
+      const distToCenter = Math.hypot(ballPos.x, ballPos.y);
+      if (distToCenter <= scoringRadius) {
+        scoreTime += dt;
+      }
+
+      if (timeRemaining <= 0 && !gameEnded) {
+        endGame();
+      }
+    }
+
+    function render() {
+      const rect = canvas.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+
+      ctx.clearRect(0, 0, width, height);
+
+      // --- 3D BACKGROUND VIGNETTE ---
+      const bgGrad = ctx.createRadialGradient(
+        width * 0.25,
+        height * 0.1,
+        width * 0.1,
+        width * 0.5,
+        height * 0.6,
+        width * 0.7
+      );
+      bgGrad.addColorStop(0, '#202438');
+      bgGrad.addColorStop(0.4, '#131726');
+      bgGrad.addColorStop(1, '#05060a');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.save();
+      ctx.translate(centerX, centerY);
+
+      // --- MAP 2D TILT VECTOR TO VISUAL 3D PLATE TILT ---
+      // We only use the tilt magnitude to gently squash the plate vertically.
+      // NOTE: We deliberately do NOT rotate the plate, so it never appears to spin;
+      // the tilt direction is instead conveyed by the center line indicator.
+      let tiltMag = Math.hypot(tilt.x, tilt.y);
+      let squashY = 1;
+
+      if (tiltMag > 0.001) {
+        const clampedMag = Math.min(tiltMag, 1);
+        const tiltDeg = MAX_PLATE_TILT_DEG * clampedMag;
+        // Non-physical but readable squash factor: at max tilt, compress to about 75% height.
+        const squashAmount = 0.25 * (tiltDeg / MAX_PLATE_TILT_DEG);
+        squashY = 1 - squashAmount;
+
+        ctx.scale(1, squashY);
+      }
+
+      // --- OUTER SHADOW (plate cast shadow) ---
+      ctx.beginPath();
+      ctx.arc(plateRadius * 0.06, plateRadius * 0.08, plateRadius * 1.02, 0, Math.PI * 2);
+      const shadowGrad = ctx.createRadialGradient(
+        plateRadius * 0.3,
+        plateRadius * 0.2,
+        plateRadius * 0.2,
+        plateRadius * 0.1,
+        plateRadius * 0.4,
+        plateRadius * 1.4
+      );
+      shadowGrad.addColorStop(0, 'rgba(0,0,0,0.55)');
+      shadowGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = shadowGrad;
+      ctx.fill();
+
+      // --- OUTER RIM (3D lip) ---
+      const rimOuter = plateRadius * 1.02;
+      const rimInner = plateRadius * 0.92;
+      const rimGrad = ctx.createRadialGradient(
+        -plateRadius * 0.25,
+        -plateRadius * 0.25,
+        rimInner * 0.3,
+        0,
+        0,
+        rimOuter
+      );
+      rimGrad.addColorStop(0, '#f3f3f3');
+      rimGrad.addColorStop(0.25, '#d9dde5');
+      rimGrad.addColorStop(0.55, '#6a7a9a');
+      rimGrad.addColorStop(1, '#111827');
+      ctx.fillStyle = rimGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, rimOuter, 0, Math.PI * 2);
+      ctx.arc(0, 0, rimInner, 0, Math.PI * 2, true);
+      ctx.closePath();
+      ctx.fill();
+
+      // --- INNER PLATE SURFACE (3D bowl) ---
+      const plateGrad = ctx.createRadialGradient(
+        -plateRadius * 0.2,
+        -plateRadius * 0.28,
+        plateRadius * 0.1,
+        0,
+        0,
+        plateRadius * 0.98
+      );
+      plateGrad.addColorStop(0, '#3a7bd6');
+      plateGrad.addColorStop(0.35, '#305fae');
+      plateGrad.addColorStop(0.7, '#1c305e');
+      plateGrad.addColorStop(1, '#070e21');
+      ctx.fillStyle = plateGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, plateRadius * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Subtle inner ring to enhance depth
+      ctx.lineWidth = plateRadius * 0.02;
+      ctx.strokeStyle = 'rgba(5,10,30,0.85)';
+      ctx.beginPath();
+      ctx.arc(0, 0, plateRadius * 0.55, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // --- SCORING ZONE (kept functionally identical) ---
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 6]);
+      ctx.strokeStyle = 'rgba(215, 235, 255, 0.85)';
+      ctx.beginPath();
+      ctx.arc(0, 0, scoringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // --- CENTER X (same logic, higher contrast) ---
+      const crossSize = ballRadius * 0.9;
+      ctx.strokeStyle = '#f8fbff';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-crossSize, 0);
+      ctx.lineTo(crossSize, 0);
+      ctx.moveTo(0, -crossSize);
+      ctx.lineTo(0, crossSize);
+      ctx.stroke();
+
+      // Plate subtle tilt indicator (line in direction of tilt) – same behavior,
+      // but uses precomputed tiltMag.
+      if (tiltMag > 0.01) {
+        const tScale = plateRadius * 0.32;
+        const tx = (tilt.x / tiltMag) * tScale;
+        const ty = (tilt.y / tiltMag) * tScale;
+        ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+      }
+
+      // --- BALL & SHADOW (3D sphere) ---
+      // Drop shadow on plate – offset slightly opposite tilt to suggest height above surface.
+      const shadowOffsetX = ballRadius * 0.25 - (tilt.x || 0) * ballRadius * 0.5;
+      const shadowOffsetY = ballRadius * 0.4 - (tilt.y || 0) * ballRadius * 0.5;
+      const shadowRadius = ballRadius * 1.1;
+      ctx.save();
+      ctx.translate(ballPos.x + shadowOffsetX, ballPos.y + shadowOffsetY);
+      const ballShadowGrad = ctx.createRadialGradient(
+        0,
+        0,
+        shadowRadius * 0.1,
+        0,
+        0,
+        shadowRadius
+      );
+      ballShadowGrad.addColorStop(0, 'rgba(0,0,0,0.4)');
+      ballShadowGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = ballShadowGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, shadowRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Ball body
+      ctx.translate(ballPos.x, ballPos.y);
+      const ballGrad = ctx.createRadialGradient(
+        -ballRadius * 0.5,
+        -ballRadius * 0.5,
+        ballRadius * 0.2,
+        0,
+        0,
+        ballRadius
+      );
+      ballGrad.addColorStop(0, '#ffe2ff');
+      ballGrad.addColorStop(0.3, '#ff4fdf');
+      ballGrad.addColorStop(0.7, '#5a0a64');
+      ballGrad.addColorStop(1, '#120016');
+
+      ctx.fillStyle = ballGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, ballRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Small specular highlight
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.ellipse(
+        -ballRadius * 0.45,
+        -ballRadius * 0.5,
+        ballRadius * 0.28,
+        ballRadius * 0.18,
+        -0.5,
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.beginPath();
+      ctx.arc(0, 0, ballRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.restore();
+
+      // Timer display (logic unchanged)
+      timerDisplay.textContent = `Time: ${timeRemaining.toFixed(1)} s`;
+    }
+
+    function loop(timestamp) {
+      if (!lastTimestamp) {
+        lastTimestamp = timestamp;
+      }
+      const dt = (timestamp - lastTimestamp) / 1000;
+      lastTimestamp = timestamp;
+
+      pollGamepadStart();
+      update(dt);
+      render();
+
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+
