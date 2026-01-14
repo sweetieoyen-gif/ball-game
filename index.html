@@ -59,14 +59,30 @@
       width: 100%;
       box-sizing: border-box;
       padding: 8px;
+      position: relative;
     }
 
-    canvas {
+    #gameCanvas {
       background: #151515;
       border-radius: 10px;
       box-shadow:
         0 0 0 1px #222,
         0 16px 40px rgba(0, 0, 0, 0.7);
+      max-width: 1100px;
+      max-height: 1100px;
+      width: 96vmin;
+      height: 96vmin;
+    }
+
+    #overlayCanvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      border-radius: 10px;
+      background: transparent !important;
+      z-index: 1;
       max-width: 1100px;
       max-height: 1100px;
       width: 96vmin;
@@ -180,8 +196,9 @@
     <div class="status" id="statusDisplay">Connect a joystick (Gamepad API). Mouse fallback is enabled.</div>
   </div>
 
-  <div class="canvas-wrapper">
+  <div class="canvas-wrapper" style="position: relative;">
     <canvas id="gameCanvas"></canvas>
+    <canvas id="overlayCanvas"></canvas>
   </div>
 
   <!-- AUTH OVERLAY (PASSWORD GATE BEFORE INSTRUCTIONS) -->
@@ -249,6 +266,20 @@
       </p>
 
       <p class="cta">Press any key, click, or press a joystick button to begin.</p>
+      
+      <button
+        id="toggleTiltIndicatorButton"
+        style="margin-top:16px; padding:10px 20px; border-radius:4px; border:none; background:#6ecf68; color:#f9fafb; font-size:14px; font-weight:500; cursor:pointer; width:100%; border:1px solid #5ab85a;"
+      >
+        Tilt Indicator: ON
+      </button>
+      
+      <button
+        id="runTestButton"
+        style="margin-top:10px; padding:10px 20px; border-radius:4px; border:none; background:#2563eb; color:#f9fafb; font-size:14px; font-weight:500; cursor:pointer; width:100%;"
+      >
+        Run Test
+      </button>
     </div>
   </div>
 
@@ -259,10 +290,36 @@
       <div class="result-main" id="finalScoreText">Score: 0.00 s</div>
       <div class="result-rating" id="finalRatingText"></div>
       <p id="ratingDetailText"></p>
-      <p class="hint">Reload the page to run another trial.</p>
+      
+      <!-- Performance Spectrum Bar -->
+      <div style="margin-top: 24px; margin-bottom: 20px;">
+        <div style="position: relative; width: 100%;">
+          <canvas id="performanceSpectrum" style="width: 100%; height: 50px; display: block; border-radius: 2px;"></canvas>
+          <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; color: #aaa;">
+            <span>Poor</span>
+            <span>Excellent</span>
+          </div>
+        </div>
+      </div>
+      
+      <button
+        id="retakeButton"
+        style="margin-top:16px; padding:10px 20px; border-radius:4px; border:none; background:#2563eb; color:#f9fafb; font-size:14px; font-weight:500; cursor:pointer; width:100%;"
+      >
+        Retake Test
+      </button>
+      <button
+        id="savePdfButton"
+        style="margin-top:10px; padding:10px 20px; border-radius:4px; border:none; background:#1f2937; color:#f9fafb; font-size:14px; font-weight:500; cursor:pointer; width:100%; border:1px solid #374151;"
+      >
+        Save as PDF
+      </button>
+      <p class="hint" style="margin-top:12px;">Or reload the page to run another trial.</p>
     </div>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script>
     // ============================================================
     // CONFIGURATION CONSTANTS (AFFECTING DIFFICULTY / REALISM)
@@ -276,7 +333,8 @@
     const TILT_SENSITIVITY = 650;      // Scales how strongly tilt accelerates the ball
     const AUTO_LEVEL_STRENGTH = 3.5;   // How quickly the plate returns toward flat when no input
     const DISTURBANCE_INTENSITY = 85;  // Magnitude of continuous random noise
-    const DISTURBANCE_NUDGE_INTENSITY = 260; // Magnitude of occasional sudden nudge impulses
+    const DISTURBANCE_NUDGE_INTENSITY = 110; // Magnitude of occasional sudden nudge impulses
+    const DISTURBANCE_NUDGE_DURATION = 1.8; // Duration in seconds that the disturbance applies
     const DISTURBANCE_NUDGE_MIN_INTERVAL = 3.0; // Min seconds between big nudges
     const DISTURBANCE_NUDGE_MAX_INTERVAL = 7.5; // Max seconds between big nudges
 
@@ -292,37 +350,393 @@
     const SCORING_RADIUS_FRACTION = 0.13;
 
     // ============================================================
-    // CANVAS & GEOMETRY SETUP
+    // THREE.JS SETUP
     // ============================================================
     const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-
+    
+    // Three.js scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff); // White background
+    
+    // Camera setup - positioned to view plate from above at an angle
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    // Camera will be positioned based on plate size
+    camera.lookAt(0, 0, 0);
+    
+    // Renderer setup
+    const renderer = new THREE.WebGLRenderer({ 
+      canvas: canvas,
+      antialias: true 
+    });
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    // Geometry variables
     let plateRadius = 0;
     let ballRadius = 0;
     let scoringRadius = 0;
-    let centerX = 0;
-    let centerY = 0;
-
+    let worldScale = 1; // Scale factor to convert pixels to Three.js world units
+    let plateHeight = 1.0; // Plate thickness - accessible globally
+    
+    // Three.js objects
+    let plateGroup = null;
+    let plateSurface = null;
+    let ball = null;
+    let scoringMaterial = null; // Store scoring zone material to change color dynamically
+    let crossMaterial = null; // Store center X material to change color dynamically
+    let scoringZone = null;
+    let centerCross = null;
+    
+    // 2D overlay canvas for tilt indicator
+    let overlayCanvas = null;
+    let overlayCtx = null;
+    
     function resizeCanvas() {
       // Make canvas square based on available space
       const rect = canvas.getBoundingClientRect();
       const size = Math.min(rect.width, rect.height);
+      
+      // Don't proceed if canvas has no size yet
+      if (size <= 0) {
+        return;
+      }
+      
       const pixelRatio = window.devicePixelRatio || 1;
 
       canvas.width = size * pixelRatio;
       canvas.height = size * pixelRatio;
+      
+      renderer.setSize(size, size, false);
+      renderer.setPixelRatio(pixelRatio);
 
-      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      // Setup overlay canvas for 2D tilt indicator
+      if (!overlayCanvas) {
+        overlayCanvas = document.getElementById('overlayCanvas');
+        if (overlayCanvas) {
+          overlayCtx = overlayCanvas.getContext('2d');
+        }
+      }
+      if (overlayCanvas) {
+        overlayCanvas.width = size * pixelRatio;
+        overlayCanvas.height = size * pixelRatio;
+        overlayCanvas.style.width = size + 'px';
+        overlayCanvas.style.height = size + 'px';
+      }
 
-      centerX = size / 2;
-      centerY = size / 2;
-      // Slightly larger plate radius to better fill the visible game area.
+      // Calculate geometry sizes (in pixels for 2D physics)
       plateRadius = size * 0.42;
       ballRadius = plateRadius * BALL_RADIUS_FRACTION;
       scoringRadius = plateRadius * SCORING_RADIUS_FRACTION;
+      
+      // Convert to Three.js world units (scale down for reasonable 3D size)
+      // Use a scale factor so plate radius is about 3-4 units in 3D space
+      worldScale = 3.5 / plateRadius; // Makes plate radius ~3.5 units
+      
+      // Update camera aspect ratio and position
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
+      // Position camera for top-down view
+      const plateRadiusWorld = plateRadius * worldScale;
+      const plateGroupY = plateGroup ? plateGroup.position.y : 0.5; // Account for raised plate
+      const cameraHeight = plateRadiusWorld * 3.5 + plateGroupY; // Height above plate for top-down view
+      camera.position.set(0, cameraHeight, 0);
+      camera.lookAt(0, plateGroupY, 0); // Look at the plate center
+      
+      // Initialize 3D objects if not already created
+      if (!plateGroup && plateRadius > 0) {
+        init3DObjects();
+      }
+    }
+    
+    function init3DObjects() {
+      // Create plate group to hold all plate components
+      plateGroup = new THREE.Group();
+      // Raise the entire plate group above the ground to prevent submerging when tilted
+      plateGroup.position.y = 0.5; // Float the plate above the ground
+      scene.add(plateGroup);
+      
+      // Convert plate radius to world units
+      const plateRadiusWorld = plateRadius * worldScale;
+      const ballRadiusWorld = ballRadius * worldScale;
+      const scoringRadiusWorld = scoringRadius * worldScale;
+      
+      // Plate surface (circular disk) - solid blue, completely non-reflective
+      // Made thicker so sides are visible when tilted
+      plateHeight = 1.0; // Increased significantly to make sides clearly visible when tilted
+      
+      // Plate sides - separate cylinder with different color for visibility when tilted
+      // Use openEnded to show only the sides (no top/bottom caps) to prevent flickering
+      // Sides will only be visible when plate is tilted (top-down view shows only top when flat)
+      // Add sides first so surface renders on top (prevents z-fighting/flickering)
+      const sideGeometry = new THREE.CylinderGeometry(plateRadiusWorld * 0.9, plateRadiusWorld * 0.9, plateHeight, 64, 1, true);
+      const sideMaterial = new THREE.MeshLambertMaterial({
+        color: 0x003366 // Darker blue-gray for sides to differentiate from surface
+      });
+      const plateSides = new THREE.Mesh(sideGeometry, sideMaterial);
+      // Position slightly lower to ensure no overlap with surface (prevents flickering)
+      plateSides.position.y = plateHeight / 2 - 0.001;
+      plateSides.renderOrder = 0; // Render sides first
+      plateGroup.add(plateSides);
+      
+      // Plate surface - add after sides so it renders on top
+      const plateGeometry = new THREE.CylinderGeometry(plateRadiusWorld * 0.9, plateRadiusWorld * 0.9, plateHeight, 64);
+      const plateMaterial = new THREE.MeshLambertMaterial({
+        color: 0x0066ff // Solid blue color for top surface
+      });
+      plateSurface = new THREE.Mesh(plateGeometry, plateMaterial);
+      plateSurface.position.y = plateHeight / 2; // Center the cylinder vertically
+      plateSurface.renderOrder = 1; // Render surface on top to prevent flickering
+      plateSurface.receiveShadow = true;
+      plateGroup.add(plateSurface);
+      
+      // Plate border/rim - taller than plate surface to act as a barrier
+      // Create a visible raised rim around the edge of the plate that prevents ball from rolling over it
+      const rimHeight = plateHeight * 2.5; // Make rim significantly taller than plate (acts as barrier)
+      const rimThickness = plateRadiusWorld * 0.04; // Thickness of the rim (reduced to make it thinner)
+      const rimRadius = plateRadiusWorld * 0.9; // Radius matches plate edge (ball is constrained to stay within)
+      
+      // Create rim as a torus ring that sits on the plate edge - visible from top-down view
+      const rimRingGeometry = new THREE.TorusGeometry(rimRadius, rimThickness, 16, 64);
+      const rimMaterial = new THREE.MeshLambertMaterial({
+        color: 0x0055aa // Brighter blue-gray for better visibility
+      });
+      const rimRing = new THREE.Mesh(rimRingGeometry, rimMaterial);
+      // Position ring on top of plate surface - this creates a visible border from above
+      rimRing.position.y = plateHeight + rimThickness / 2; // Position at plate surface level
+      rimRing.rotation.x = Math.PI / 2; // Rotate to be horizontal (lying flat on plate)
+      rimRing.renderOrder = 3; // Render after surface
+      plateGroup.add(rimRing);
+      
+      // Create vertical wall part of the rim that extends upward (visible when tilted)
+      // This wall acts as the barrier preventing the ball from going over
+      const rimWallGeometry = new THREE.CylinderGeometry(rimRadius + rimThickness, rimRadius + rimThickness, rimHeight, 64, 1, true);
+      const rimWall = new THREE.Mesh(rimWallGeometry, rimMaterial);
+      rimWall.position.y = plateHeight + rimHeight / 2; // Position so it extends well above plate
+      rimWall.renderOrder = 3;
+      plateGroup.add(rimWall);
+      
+      // Scoring zone indicator (complete solid circle)
+      const scoringCurve = new THREE.EllipseCurve(0, 0, scoringRadiusWorld, scoringRadiusWorld, 0, 2 * Math.PI, false, 0);
+      const scoringPoints = scoringCurve.getPoints(128);
+      // Create complete circle (no gaps)
+      const circlePoints = [];
+      for (let i = 0; i < scoringPoints.length; i++) {
+        const point = scoringPoints[i];
+        circlePoints.push(new THREE.Vector3(point.x, plateHeight + 0.02, point.y));
+      }
+      // Close the circle by adding the first point at the end
+      if (circlePoints.length > 0) {
+        circlePoints.push(circlePoints[0]);
+      }
+      const circleGeometry = new THREE.BufferGeometry().setFromPoints(circlePoints);
+      scoringMaterial = new THREE.LineBasicMaterial({
+        color: 0xd7ebff, // Default white/light blue color
+        transparent: true,
+        opacity: 0.85,
+        linewidth: 2
+      });
+      scoringZone = new THREE.Line(circleGeometry, scoringMaterial);
+      plateGroup.add(scoringZone);
+      
+      // Outer orientation circle (bigger circle to help indicate plate orientation and tilting)
+      const outerCircleRadiusWorld = scoringRadiusWorld * 2.0; // Make it 2x the scoring circle radius
+      const outerCircleCurve = new THREE.EllipseCurve(0, 0, outerCircleRadiusWorld, outerCircleRadiusWorld, 0, 2 * Math.PI, false, 0);
+      const outerCirclePoints = outerCircleCurve.getPoints(128);
+      // Create complete circle (no gaps)
+      const outerCirclePoints3D = [];
+      for (let i = 0; i < outerCirclePoints.length; i++) {
+        const point = outerCirclePoints[i];
+        outerCirclePoints3D.push(new THREE.Vector3(point.x, plateHeight + 0.02, point.y));
+      }
+      // Close the circle by adding the first point at the end
+      if (outerCirclePoints3D.length > 0) {
+        outerCirclePoints3D.push(outerCirclePoints3D[0]);
+      }
+      const outerCircleGeometry = new THREE.BufferGeometry().setFromPoints(outerCirclePoints3D);
+      // Use the same material properties as the scoring circle for consistent thickness
+      const outerCircleMaterial = new THREE.LineBasicMaterial({
+        color: 0xd7ebff, // Same white/light blue color
+        transparent: true,
+        opacity: 0.85,
+        linewidth: 2 // Same thickness as scoring circle
+      });
+      const outerCircle = new THREE.Line(outerCircleGeometry, outerCircleMaterial);
+      plateGroup.add(outerCircle);
+      
+      // Third orientation circle (even bigger circle)
+      const thirdCircleRadiusWorld = scoringRadiusWorld * 3.0; // Make it 3x the scoring circle radius
+      const thirdCircleCurve = new THREE.EllipseCurve(0, 0, thirdCircleRadiusWorld, thirdCircleRadiusWorld, 0, 2 * Math.PI, false, 0);
+      const thirdCirclePoints = thirdCircleCurve.getPoints(128);
+      // Create complete circle (no gaps)
+      const thirdCirclePoints3D = [];
+      for (let i = 0; i < thirdCirclePoints.length; i++) {
+        const point = thirdCirclePoints[i];
+        thirdCirclePoints3D.push(new THREE.Vector3(point.x, plateHeight + 0.02, point.y));
+      }
+      // Close the circle by adding the first point at the end
+      if (thirdCirclePoints3D.length > 0) {
+        thirdCirclePoints3D.push(thirdCirclePoints3D[0]);
+      }
+      const thirdCircleGeometry = new THREE.BufferGeometry().setFromPoints(thirdCirclePoints3D);
+      // Use the same material properties as the scoring circle for consistent thickness
+      const thirdCircleMaterial = new THREE.LineBasicMaterial({
+        color: 0xd7ebff, // Same white/light blue color
+        transparent: true,
+        opacity: 0.85,
+        linewidth: 2 // Same thickness as scoring circle
+      });
+      const thirdCircle = new THREE.Line(thirdCircleGeometry, thirdCircleMaterial);
+      plateGroup.add(thirdCircle);
+      
+      // Fourth orientation circle (largest circle)
+      const fourthCircleRadiusWorld = scoringRadiusWorld * 4.0; // Make it 4x the scoring circle radius
+      const fourthCircleCurve = new THREE.EllipseCurve(0, 0, fourthCircleRadiusWorld, fourthCircleRadiusWorld, 0, 2 * Math.PI, false, 0);
+      const fourthCirclePoints = fourthCircleCurve.getPoints(128);
+      // Create complete circle (no gaps)
+      const fourthCirclePoints3D = [];
+      for (let i = 0; i < fourthCirclePoints.length; i++) {
+        const point = fourthCirclePoints[i];
+        fourthCirclePoints3D.push(new THREE.Vector3(point.x, plateHeight + 0.02, point.y));
+      }
+      // Close the circle by adding the first point at the end
+      if (fourthCirclePoints3D.length > 0) {
+        fourthCirclePoints3D.push(fourthCirclePoints3D[0]);
+      }
+      const fourthCircleGeometry = new THREE.BufferGeometry().setFromPoints(fourthCirclePoints3D);
+      // Use the same material properties as the scoring circle for consistent thickness
+      const fourthCircleMaterial = new THREE.LineBasicMaterial({
+        color: 0xd7ebff, // Same white/light blue color
+        transparent: true,
+        opacity: 0.85,
+        linewidth: 2 // Same thickness as scoring circle
+      });
+      const fourthCircle = new THREE.Line(fourthCircleGeometry, fourthCircleMaterial);
+      plateGroup.add(fourthCircle);
+      
+      // Center X marker - create using boxes for a clear, visible X from top-down view
+      const crossSize = plateRadiusWorld * 0.12; // Size of the X marker (reduced)
+      const crossThickness = plateRadiusWorld * 0.03; // Thickness of the X lines (kept the same)
+      const crossHeight = 0.05; // Height of the X above plate surface
+      
+      crossMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xffffff // White X for better visibility (will change to green when ball is in scoring zone)
+      });
+      
+      // Create a group for the X
+      const crossGroup = new THREE.Group();
+      
+      // First diagonal (top-left to bottom-right) - using a box
+      const diagonal1Geometry = new THREE.BoxGeometry(crossThickness, crossHeight, crossSize * 2.828);
+      const diagonal1 = new THREE.Mesh(diagonal1Geometry, crossMaterial);
+      diagonal1.rotation.y = Math.PI / 4; // Rotate 45 degrees to form diagonal
+      diagonal1.position.set(0, crossHeight / 2, 0);
+      crossGroup.add(diagonal1);
+      
+      // Second diagonal (top-right to bottom-left) - using a box
+      const diagonal2Geometry = new THREE.BoxGeometry(crossThickness, crossHeight, crossSize * 2.828);
+      const diagonal2 = new THREE.Mesh(diagonal2Geometry, crossMaterial);
+      diagonal2.rotation.y = -Math.PI / 4; // Rotate -45 degrees to form diagonal
+      diagonal2.position.set(0, crossHeight / 2, 0);
+      crossGroup.add(diagonal2);
+      
+      crossGroup.position.y = plateHeight + 0.05; // Position above plate surface
+      
+      centerCross = crossGroup;
+      plateGroup.add(centerCross);
+      
+      // Ball (sphere) - simple red ball, no texture, no gradient
+      const ballGeometry = new THREE.SphereGeometry(ballRadiusWorld, 32, 32);
+      // Use MeshLambertMaterial with simple red color - no texture to prevent flickering
+      const ballMaterial = new THREE.MeshLambertMaterial({
+        color: 0xff0000 // Simple red color (stays red)
+      });
+      ball = new THREE.Mesh(ballGeometry, ballMaterial);
+      // Initial position relative to raised plate
+      const plateGroupY = plateGroup.position.y;
+      ball.position.y = plateGroupY + plateHeight + ballRadiusWorld + 0.15;
+      ball.castShadow = false; // Shadow removed
+      ball.renderOrder = 10; // High render order to ensure ball renders on top (prevents flickering)
+      scene.add(ball);
+      
+      // Lighting setup
+      // Ambient light for base illumination
+      const ambientLight = new THREE.AmbientLight(0x404040, 0.65);
+      scene.add(ambientLight);
+      
+      // Directional light from above
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.35);
+      directionalLight.position.set(0, 10, 5);
+      directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
+      directionalLight.shadow.camera.near = 0.5;
+      directionalLight.shadow.camera.far = 20;
+      const shadowSize = plateRadiusWorld * 2;
+      directionalLight.shadow.camera.left = -shadowSize;
+      directionalLight.shadow.camera.right = shadowSize;
+      directionalLight.shadow.camera.top = shadowSize;
+      directionalLight.shadow.camera.bottom = -shadowSize;
+      scene.add(directionalLight);
+      
+      // Additional point light for depth
+      const pointLight = new THREE.PointLight(0xffffff, 0.1);
+      pointLight.position.set(-plateRadiusWorld, 5, -plateRadiusWorld);
+      scene.add(pointLight);
+      
+      // White ground plane for area outside the plate
+      const groundGeometry = new THREE.PlaneGeometry(plateRadiusWorld * 4, plateRadiusWorld * 4);
+      const groundMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffffff, // White
+        roughness: 0.8,
+        metalness: 0.1
+      });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = 0;
+      ground.receiveShadow = true;
+      scene.add(ground);
+      
+      // Add a shadow-receiving plane slightly above for better shadow visibility
+      const shadowPlaneGeometry = new THREE.PlaneGeometry(plateRadiusWorld * 4, plateRadiusWorld * 4);
+      const shadowPlaneMaterial = new THREE.ShadowMaterial({ opacity: 0.2 });
+      const shadowPlane = new THREE.Mesh(shadowPlaneGeometry, shadowPlaneMaterial);
+      shadowPlane.rotation.x = -Math.PI / 2;
+      shadowPlane.position.y = 0.01; // Slightly above ground
+      shadowPlane.receiveShadow = true;
+      scene.add(shadowPlane);
     }
 
-    window.addEventListener('resize', resizeCanvas);
+    window.addEventListener('resize', () => {
+      resizeCanvas();
+      // Redraw spectrum if game has ended
+      if (gameEnded) {
+        setTimeout(() => {
+          drawPerformanceSpectrum();
+        }, 100);
+      }
+    });
+    
+    // Initialize after DOM is ready and canvas has dimensions
+    function ensureInitialized() {
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.min(rect.width, rect.height);
+      if (size > 0 && (!plateGroup || !ball)) {
+        resizeCanvas();
+      }
+      // Always render
+      if (plateGroup && ball) {
+        renderer.render(scene, camera);
+      }
+    }
+    
+    // Try multiple times to ensure initialization
+    window.addEventListener('load', () => {
+      ensureInitialized();
+      setTimeout(ensureInitialized, 50);
+      setTimeout(ensureInitialized, 200);
+    });
+    
+    // Also try immediately
     resizeCanvas();
 
     // ============================================================
@@ -334,6 +748,7 @@
     let authPassed = false; // becomes true after correct password
     let timeRemaining = GAME_DURATION;
     let scoreTime = 0; // cumulative seconds inside scoring zone
+    let tiltIndicatorEnabled = true; // Toggle for yellow tilt indicator
 
     // Ball state (plate-local coordinates with origin at plate center)
     let ballPos = { x: 0, y: 0 };
@@ -344,6 +759,7 @@
 
     // Disturbance state
     let nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+    let activeDisturbance = null; // { angle: number, timeRemaining: number } or null
 
     // Input state
     let usingGamepad = false;
@@ -458,6 +874,10 @@
     const finalScoreText = document.getElementById('finalScoreText');
     const finalRatingText = document.getElementById('finalRatingText');
     const ratingDetailText = document.getElementById('ratingDetailText');
+    const retakeButton = document.getElementById('retakeButton');
+    const savePdfButton = document.getElementById('savePdfButton');
+    const runTestButton = document.getElementById('runTestButton');
+    const toggleTiltIndicatorButton = document.getElementById('toggleTiltIndicatorButton');
 
     function maybeStartGame() {
       // Block game start until password gate is passed.
@@ -476,11 +896,92 @@
       ballVel = { x: 0, y: 0 };
       tilt = { x: 0, y: 0 };
       nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+      activeDisturbance = null;
       startOverlay.style.display = 'none';
       statusDisplay.textContent = usingGamepad
         ? 'Active input: joystick (left stick).'
         : 'Active input: mouse tilt.';
       lastTimestamp = null;
+      
+      // Ensure 3D objects are initialized
+      if (!plateGroup || !ball) {
+        ensureInitialized();
+      }
+    }
+
+    function drawPerformanceSpectrum() {
+      const canvas = document.getElementById('performanceSpectrum');
+      if (!canvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      
+      const width = rect.width;
+      const height = rect.height;
+      
+      // Calculate performance percentage (0-100)
+      const performancePercent = Math.min(100, Math.max(0, (scoreTime / GAME_DURATION) * 100));
+      
+      // Define bar dimensions (bar positioned in lower part, triangle above)
+      const markerSize = 8;
+      const barHeight = height - markerSize - 4; // Leave space for triangle above
+      const barY = markerSize + 4; // Start bar below triangle
+      
+      // Color stops for gradient (matching rating colors)
+      // Poor (left): #ff6b6b (255, 107, 107)
+      // Average: #f0c674 (240, 198, 116)
+      // Good: #6ecf68 (110, 207, 104)
+      // Excellent (right): #7fd0ff (127, 208, 255)
+      
+      const gradient = ctx.createLinearGradient(0, 0, width, 0);
+      gradient.addColorStop(0, '#ff6b6b');      // Poor - red
+      gradient.addColorStop(0.33, '#f0c674');  // Average - yellow
+      gradient.addColorStop(0.67, '#6ecf68');  // Good - green
+      gradient.addColorStop(1, '#7fd0ff');      // Excellent - blue
+      
+      // Draw spectrum bar
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, barY, width, barHeight);
+      
+      // Draw 10 vertical divider bars
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 10; i++) {
+        const x = (width / 10) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, barY);
+        ctx.lineTo(x, barY + barHeight);
+        ctx.stroke();
+      }
+      
+      // Draw marker position
+      const markerX = (performancePercent / 100) * width;
+      
+      // Draw triangular marker above the bar (pointing downward - tip at bottom of triangle)
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(markerX, barY); // Tip pointing down to top of bar
+      ctx.lineTo(markerX - markerSize, 0); // Top left
+      ctx.lineTo(markerX + markerSize, 0); // Top right
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw vertical dashed line from marker tip down through the bar
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(markerX, barY);
+      ctx.lineTo(markerX, barY + barHeight);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     function endGame() {
@@ -496,6 +997,189 @@
       ratingDetailText.textContent = ratingInfo.detail;
 
       endOverlay.style.display = 'flex';
+      
+      // Draw performance spectrum after overlay is shown
+      setTimeout(() => {
+        drawPerformanceSpectrum();
+      }, 100);
+    }
+
+    function resetGame() {
+      gameRunning = false;
+      gameEnded = false;
+      timeRemaining = GAME_DURATION;
+      scoreTime = 0;
+      ballPos = { x: 0, y: 0 };
+      ballVel = { x: 0, y: 0 };
+      tilt = { x: 0, y: 0 };
+      nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
+      activeDisturbance = null;
+      lastTimestamp = null;
+      endOverlay.style.display = 'none';
+      startOverlay.style.display = 'flex';
+      statusDisplay.textContent = usingGamepad
+        ? 'Joystick detected (Gamepad API active). Mouse fallback is available.'
+        : 'Connect a joystick (Gamepad API). Mouse fallback is enabled.';
+    }
+
+    function saveResultsAsPDF() {
+      // Check if jsPDF is available
+      let jsPDF;
+      if (typeof window.jspdf !== 'undefined') {
+        jsPDF = window.jspdf.jsPDF;
+      } else if (typeof window.jsPDF !== 'undefined') {
+        jsPDF = window.jsPDF;
+      } else {
+        alert('PDF library not loaded. Please refresh the page.');
+        return;
+      }
+
+      const doc = new jsPDF();
+      
+      // Get current result data
+      const score = finalScoreText.textContent;
+      const rating = finalRatingText.textContent;
+      const detail = ratingDetailText.textContent;
+      
+      // Get rating color class to determine PDF color
+      const ratingClass = finalRatingText.className;
+      let ratingColor = [125, 208, 255]; // Default: excellent blue
+      if (ratingClass.includes('rating-poor')) {
+        ratingColor = [255, 107, 107]; // Red
+      } else if (ratingClass.includes('rating-average')) {
+        ratingColor = [240, 198, 116]; // Yellow
+      } else if (ratingClass.includes('rating-good')) {
+        ratingColor = [110, 207, 104]; // Green
+      } else if (ratingClass.includes('rating-excellent')) {
+        ratingColor = [125, 208, 255]; // Blue
+      }
+      
+      // Set dark background
+      doc.setFillColor(20, 20, 20);
+      doc.rect(0, 0, 210, 297, 'F');
+      
+      // Add title
+      doc.setTextColor(241, 241, 241);
+      doc.setFontSize(24);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Trial Complete', 105, 50, { align: 'center' });
+      
+      // Add score (large, bold)
+      doc.setFontSize(32);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(250, 250, 250);
+      doc.text(score, 105, 90, { align: 'center' });
+      
+      // Add rating (colored)
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(ratingColor[0], ratingColor[1], ratingColor[2]);
+      doc.text(rating, 105, 110, { align: 'center' });
+      
+      // Add detail text
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(200, 200, 200);
+      
+      // Split long text into multiple lines if needed
+      const splitDetail = doc.splitTextToSize(detail, 180);
+      let detailY = 135;
+      doc.text(splitDetail, 105, detailY, { align: 'center' });
+      detailY += splitDetail.length * 6 + 15;
+      
+      // ===== PERFORMANCE SPECTRUM BAR =====
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const spectrumX = 25;
+      const markerSize = 3;
+      const spectrumY = detailY + markerSize + 2; // Position bar below triangle
+      const spectrumWidth = pageWidth - 50;
+      const spectrumHeight = 8;
+      
+      // Calculate performance percentage
+      const performancePercent = Math.min(100, Math.max(0, (scoreTime / GAME_DURATION) * 100));
+      const markerX = spectrumX + (performancePercent / 100) * spectrumWidth;
+      
+      // Draw gradient spectrum bar divided into 10 parts
+      const segmentCount = 10;
+      const segmentWidth = spectrumWidth / segmentCount;
+      for (let i = 0; i < segmentCount; i++) {
+        const t = i / (segmentCount - 1);
+        let r, g, b;
+        
+        if (t < 0.33) {
+          // Poor to Average
+          const localT = t / 0.33;
+          r = Math.round(255 - (255 - 240) * localT);
+          g = Math.round(107 + (198 - 107) * localT);
+          b = Math.round(107 + (116 - 107) * localT);
+        } else if (t < 0.67) {
+          // Average to Good
+          const localT = (t - 0.33) / 0.34;
+          r = Math.round(240 - (240 - 110) * localT);
+          g = Math.round(198 - (198 - 207) * localT);
+          b = Math.round(116 - (116 - 104) * localT);
+        } else {
+          // Good to Excellent
+          const localT = (t - 0.67) / 0.33;
+          r = Math.round(110 + (127 - 110) * localT);
+          g = Math.round(207 + (208 - 207) * localT);
+          b = Math.round(104 + (255 - 104) * localT);
+        }
+        
+        doc.setFillColor(r, g, b);
+        doc.rect(spectrumX + i * segmentWidth, spectrumY, segmentWidth, spectrumHeight, 'F');
+      }
+      
+      // Draw 9 vertical divider bars (10 segments = 9 dividers)
+      doc.setDrawColor(51, 51, 51);
+      doc.setLineWidth(0.5);
+      for (let i = 1; i < segmentCount; i++) {
+        const x = spectrumX + i * segmentWidth;
+        doc.line(x, spectrumY, x, spectrumY + spectrumHeight);
+      }
+      
+      // Draw marker triangle above the bar (pointing downward - tip at top of bar)
+      const triangleTopY = detailY;
+      
+      // Draw triangle using filled rectangles (approximation for jsPDF)
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(51, 51, 51);
+      doc.setLineWidth(0.3);
+      
+      // Draw triangle by filling rows from top to bottom (tip at bottom of triangle)
+      for (let row = 0; row < markerSize; row++) {
+        const y = triangleTopY + row;
+        const width = (markerSize - row) * 1.5;
+        doc.rect(markerX - width / 2, y, width, 0.8, 'FD');
+      }
+      
+      // Draw vertical dashed line from marker tip down through the bar
+      doc.setDrawColor(255, 255, 255);
+      doc.setLineWidth(0.5);
+      doc.setLineDashPattern([1, 1], 0);
+      doc.line(markerX, spectrumY, markerX, spectrumY + spectrumHeight);
+      doc.setLineDashPattern([], 0);
+      
+      // Labels
+      doc.setFontSize(9);
+      doc.setTextColor(170, 170, 170);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Poor', spectrumX, spectrumY + spectrumHeight + 5);
+      doc.text('Excellent', spectrumX + spectrumWidth, spectrumY + spectrumHeight + 5, { align: 'right' });
+      
+      // Update Y position for timestamp
+      detailY = spectrumY + spectrumHeight + 20;
+      
+      // Add timestamp
+      const now = new Date();
+      const timestamp = now.toLocaleString();
+      doc.setFontSize(10);
+      doc.setTextColor(153, 153, 153);
+      doc.text(`Generated: ${timestamp}`, 105, 280, { align: 'center' });
+      
+      // Save PDF
+      const filename = `Psychomotor_Assessment_${now.getTime()}.pdf`;
+      doc.save(filename);
     }
 
     // ------------------------------------------------------------
@@ -584,6 +1268,36 @@
       if (authSubmitButton) {
         authSubmitButton.addEventListener('click', handleAuthSubmit);
       }
+      if (retakeButton) {
+        retakeButton.addEventListener('click', resetGame);
+      }
+      if (savePdfButton) {
+        savePdfButton.addEventListener('click', saveResultsAsPDF);
+      }
+      if (runTestButton) {
+        runTestButton.addEventListener('click', maybeStartGame);
+      }
+      if (toggleTiltIndicatorButton) {
+        toggleTiltIndicatorButton.addEventListener('click', (e) => {
+          e.stopPropagation(); // Prevent the click from triggering game start
+          tiltIndicatorEnabled = !tiltIndicatorEnabled;
+          toggleTiltIndicatorButton.textContent = tiltIndicatorEnabled ? 'Tilt Indicator: ON' : 'Tilt Indicator: OFF';
+          // Change button color: green when ON, gray when OFF
+          if (tiltIndicatorEnabled) {
+            toggleTiltIndicatorButton.style.background = '#6ecf68'; // Green color
+            toggleTiltIndicatorButton.style.border = '1px solid #5ab85a';
+          } else {
+            toggleTiltIndicatorButton.style.background = '#1f2937'; // Gray color
+            toggleTiltIndicatorButton.style.border = '1px solid #374151';
+          }
+        });
+        toggleTiltIndicatorButton.addEventListener('mousedown', (e) => {
+          e.stopPropagation(); // Also prevent mousedown from triggering game start
+        });
+        // Set initial color based on default state (ON)
+        toggleTiltIndicatorButton.style.background = '#6ecf68';
+        toggleTiltIndicatorButton.style.border = '1px solid #5ab85a';
+      }
     });
 
     // ============================================================
@@ -638,13 +1352,29 @@
       ballVel.x += Math.cos(noiseAngle) * noiseScale * 0.02;
       ballVel.y += Math.sin(noiseAngle) * noiseScale * 0.02;
 
-      // Occasional sudden nudge impulses
+      // Occasional sudden nudge impulses (now applied over time)
+      if (activeDisturbance) {
+        // Apply disturbance force over time
+        const forcePerSecond = DISTURBANCE_NUDGE_INTENSITY / DISTURBANCE_NUDGE_DURATION;
+        const forceThisFrame = forcePerSecond * dt;
+        ballVel.x += Math.cos(activeDisturbance.angle) * forceThisFrame;
+        ballVel.y += Math.sin(activeDisturbance.angle) * forceThisFrame;
+        
+        // Decrease remaining time
+        activeDisturbance.timeRemaining -= dt;
+        if (activeDisturbance.timeRemaining <= 0) {
+          activeDisturbance = null;
+        }
+      }
+      
+      // Check if it's time to start a new disturbance
       nextNudgeIn -= dt;
-      if (nextNudgeIn <= 0) {
+      if (nextNudgeIn <= 0 && !activeDisturbance) {
         const nAngle = Math.random() * Math.PI * 2;
-        const nMag = DISTURBANCE_NUDGE_INTENSITY;
-        ballVel.x += Math.cos(nAngle) * nMag;
-        ballVel.y += Math.sin(nAngle) * nMag;
+        activeDisturbance = {
+          angle: nAngle,
+          timeRemaining: DISTURBANCE_NUDGE_DURATION
+        };
         nextNudgeIn = randomRange(DISTURBANCE_NUDGE_MIN_INTERVAL, DISTURBANCE_NUDGE_MAX_INTERVAL);
       }
 
@@ -666,16 +1396,21 @@
       ballPos.y += ballVel.y * dt;
 
       // --- PLATE BOUNDARY CONSTRAINT ---
-      const maxR = plateRadius - ballRadius;
+      // Constrain ball to stay within rim/border radius (plateRadius * 0.9)
+      // The rim acts as a barrier - ball cannot roll over it
+      // Rim radius matches plate surface radius (0.9 of full plate radius)
+      const rimRadius2D = plateRadius * 0.9; // Match the rim radius in 2D pixel space
+      const maxR = rimRadius2D - ballRadius; // Constrain to rim radius minus ball radius
       const dist = Math.hypot(ballPos.x, ballPos.y);
       if (dist > maxR && dist > 0) {
-        // Clamp position to edge
+        // Clamp position to rim edge (ball hits the rim/border and cannot go over)
         const nx = ballPos.x / dist;
         const ny = ballPos.y / dist;
         ballPos.x = nx * maxR;
         ballPos.y = ny * maxR;
 
-        // Remove outward radial component of velocity to "slide" along edge without bounce
+        // Remove outward radial component of velocity to "slide" along rim edge without bounce
+        // Ball cannot go over the rim because it's constrained to stay within rim radius
         const vDotN = ballVel.x * nx + ballVel.y * ny;
         if (vDotN > 0) {
           ballVel.x -= vDotN * nx;
@@ -698,209 +1433,149 @@
     }
 
     function render() {
-      const rect = canvas.getBoundingClientRect();
-      const width = rect.width;
-      const height = rect.height;
-
-      ctx.clearRect(0, 0, width, height);
-
-      // --- 3D BACKGROUND VIGNETTE ---
-      const bgGrad = ctx.createRadialGradient(
-        width * 0.25,
-        height * 0.1,
-        width * 0.1,
-        width * 0.5,
-        height * 0.6,
-        width * 0.7
-      );
-      bgGrad.addColorStop(0, '#202438');
-      bgGrad.addColorStop(0.4, '#131726');
-      bgGrad.addColorStop(1, '#05060a');
-      ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.save();
-      ctx.translate(centerX, centerY);
-
-      // --- MAP 2D TILT VECTOR TO VISUAL 3D PLATE TILT ---
-      // We only use the tilt magnitude to gently squash the plate vertically.
-      // NOTE: We deliberately do NOT rotate the plate, so it never appears to spin;
-      // the tilt direction is instead conveyed by the center line indicator.
-      let tiltMag = Math.hypot(tilt.x, tilt.y);
-      let squashY = 1;
-
+      // Try to initialize if not done yet
+      if (!plateGroup || !ball) {
+        resizeCanvas();
+        // Still render the scene even if objects aren't ready
+        if (plateGroup && ball) {
+          renderer.render(scene, camera);
+        }
+        timerDisplay.textContent = `Time: ${timeRemaining.toFixed(1)} s`;
+        return;
+      }
+      
+      // --- UPDATE PLATE TILT (3D ROTATION) ---
+      // Map 2D tilt to 3D rotation
+      // tilt.x rotates around Z-axis (left/right)
+      // tilt.y rotates around X-axis (forward/backward)
+      const maxTiltRad = (MAX_PLATE_TILT_DEG * Math.PI) / 180;
+      const tiltMag = Math.hypot(tilt.x, tilt.y);
       if (tiltMag > 0.001) {
-        const clampedMag = Math.min(tiltMag, 1);
-        const tiltDeg = MAX_PLATE_TILT_DEG * clampedMag;
-        // Non-physical but readable squash factor: at max tilt, compress to about 75% height.
-        const squashAmount = 0.25 * (tiltDeg / MAX_PLATE_TILT_DEG);
-        squashY = 1 - squashAmount;
-
-        ctx.scale(1, squashY);
+        const clampedTiltMag = Math.min(tiltMag, 1);
+        const scale = clampedTiltMag / tiltMag;
+        plateGroup.rotation.z = -tilt.x * maxTiltRad * scale;
+        plateGroup.rotation.x = tilt.y * maxTiltRad * scale;
+      } else {
+        plateGroup.rotation.z = 0;
+        plateGroup.rotation.x = 0;
       }
-
-      // --- OUTER SHADOW (plate cast shadow) ---
-      ctx.beginPath();
-      ctx.arc(plateRadius * 0.06, plateRadius * 0.08, plateRadius * 1.02, 0, Math.PI * 2);
-      const shadowGrad = ctx.createRadialGradient(
-        plateRadius * 0.3,
-        plateRadius * 0.2,
-        plateRadius * 0.2,
-        plateRadius * 0.1,
-        plateRadius * 0.4,
-        plateRadius * 1.4
-      );
-      shadowGrad.addColorStop(0, 'rgba(0,0,0,0.55)');
-      shadowGrad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = shadowGrad;
-      ctx.fill();
-
-      // --- OUTER RIM (3D lip) ---
-      const rimOuter = plateRadius * 1.02;
-      const rimInner = plateRadius * 0.92;
-      const rimGrad = ctx.createRadialGradient(
-        -plateRadius * 0.25,
-        -plateRadius * 0.25,
-        rimInner * 0.3,
-        0,
-        0,
-        rimOuter
-      );
-      rimGrad.addColorStop(0, '#f3f3f3');
-      rimGrad.addColorStop(0.25, '#d9dde5');
-      rimGrad.addColorStop(0.55, '#6a7a9a');
-      rimGrad.addColorStop(1, '#111827');
-      ctx.fillStyle = rimGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, rimOuter, 0, Math.PI * 2);
-      ctx.arc(0, 0, rimInner, 0, Math.PI * 2, true);
-      ctx.closePath();
-      ctx.fill();
-
-      // --- INNER PLATE SURFACE (3D bowl) ---
-      const plateGrad = ctx.createRadialGradient(
-        -plateRadius * 0.2,
-        -plateRadius * 0.28,
-        plateRadius * 0.1,
-        0,
-        0,
-        plateRadius * 0.98
-      );
-      plateGrad.addColorStop(0, '#3a7bd6');
-      plateGrad.addColorStop(0.35, '#305fae');
-      plateGrad.addColorStop(0.7, '#1c305e');
-      plateGrad.addColorStop(1, '#070e21');
-      ctx.fillStyle = plateGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, plateRadius * 0.9, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Subtle inner ring to enhance depth
-      ctx.lineWidth = plateRadius * 0.02;
-      ctx.strokeStyle = 'rgba(5,10,30,0.85)';
-      ctx.beginPath();
-      ctx.arc(0, 0, plateRadius * 0.55, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // --- SCORING ZONE (kept functionally identical) ---
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 6]);
-      ctx.strokeStyle = 'rgba(215, 235, 255, 0.85)';
-      ctx.beginPath();
-      ctx.arc(0, 0, scoringRadius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // --- CENTER X (same logic, higher contrast) ---
-      const crossSize = ballRadius * 0.9;
-      ctx.strokeStyle = '#f8fbff';
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(-crossSize, 0);
-      ctx.lineTo(crossSize, 0);
-      ctx.moveTo(0, -crossSize);
-      ctx.lineTo(0, crossSize);
-      ctx.stroke();
-
-      // Plate subtle tilt indicator (line in direction of tilt) – same behavior,
-      // but uses precomputed tiltMag.
-      if (tiltMag > 0.01) {
-        const tScale = plateRadius * 0.32;
-        const tx = (tilt.x / tiltMag) * tScale;
-        const ty = (tilt.y / tiltMag) * tScale;
-        ctx.strokeStyle = 'rgba(255,255,255,0.16)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(tx, ty);
-        ctx.stroke();
+      
+      
+      // --- UPDATE BALL POSITION (3D SPACE) ---
+      // Map 2D coordinates to 3D: X→X, Y→Z (Y is up in Three.js)
+      // Scale coordinates from pixel space to world space
+      const ballRadiusWorld = ballRadius * worldScale;
+      const ballX = ballPos.x * worldScale;
+      const ballZ = ballPos.y * worldScale; // Y in 2D becomes Z in 3D
+      
+      // Calculate ball height to keep it on the tilted plate surface
+      // Plate group is at y = 0.5, plate surface top is at y = plateHeight relative to group
+      // (plate is centered at plateHeight/2, so top is at plateHeight)
+      // So absolute plate surface top is at y = 0.5 + plateHeight
+      const plateGroupY = plateGroup.position.y; // Plate group's Y position
+      const plateSurfaceTopY = plateGroupY + plateHeight; // Top of plate surface (absolute position)
+      
+      // Get plate rotations
+      const rotX = plateGroup.rotation.x;
+      const rotZ = plateGroup.rotation.z;
+      
+      // Calculate surface height at ball position using plane equation
+      // For a plane rotated around X and Z axes, the height at point (x, z) is:
+      // height = baseY + x*sin(rotZ) + z*sin(rotX) - x*z*sin(rotX)*sin(rotZ) (for combined rotations)
+      // Simplified for small angles: height ≈ baseY + x*sin(rotZ) + z*sin(rotX)
+      const sinRotX = Math.sin(rotX);
+      const sinRotZ = Math.sin(rotZ);
+      
+      // Calculate the height of the plate surface at the ball's (x, z) position
+      // Account for both X and Z rotations
+      let surfaceHeightAtBall = plateSurfaceTopY;
+      
+      // Apply Z rotation (left/right tilt) - affects X coordinate
+      // For a plane rotated around Z-axis, height changes with X position
+      surfaceHeightAtBall += ballX * sinRotZ;
+      
+      // Apply X rotation (forward/back tilt) - affects Z coordinate
+      // For a plane rotated around X-axis, height changes with Z position
+      surfaceHeightAtBall += ballZ * sinRotX;
+      
+      // Ball center should be at: surface height + ball radius + generous safety margin
+      // Use larger margin to prevent submerging during rapid movement or tilting
+      const safetyMargin = 0.4; // Increased safety margin for better clearance
+      const ballCenterY = surfaceHeightAtBall + ballRadiusWorld + safetyMargin;
+      
+      // Calculate absolute minimum safe height (plate top + ball radius + margin)
+      // This ensures ball never goes below this height regardless of position
+      // Plate top is at plateGroupY + plateHeight (cylinder centered at plateHeight/2, height = plateHeight)
+      const absoluteMinHeight = plateGroupY + plateHeight + ballRadiusWorld + safetyMargin;
+      
+      ball.position.x = ballX;
+      ball.position.z = ballZ;
+      
+      // Use the maximum of calculated height and absolute minimum
+      // Add extra buffer to account for any calculation errors or edge cases
+      const finalHeight = Math.max(ballCenterY, absoluteMinHeight);
+      ball.position.y = finalHeight + 0.15; // Additional buffer for safety
+      
+      // Change circle and X color based on whether ball is inside the scoring circle
+      if (scoringMaterial && crossMaterial) {
+        const distToCenter = Math.hypot(ballPos.x, ballPos.y);
+        // Check if ball is inside or touching the scoring circle
+        if (distToCenter <= scoringRadius) {
+          // Ball is in scoring zone - make circle and X green
+          scoringMaterial.color.setHex(0x00ff00);
+          crossMaterial.color.setHex(0x00ff00);
+        } else {
+          // Ball is outside scoring zone - make circle white/light blue and X white
+          scoringMaterial.color.setHex(0xd7ebff);
+          crossMaterial.color.setHex(0xffffff);
+        }
       }
-
-      // --- BALL & SHADOW (3D sphere) ---
-      // Drop shadow on plate – offset slightly opposite tilt to suggest height above surface.
-      const shadowOffsetX = ballRadius * 0.25 - (tilt.x || 0) * ballRadius * 0.5;
-      const shadowOffsetY = ballRadius * 0.4 - (tilt.y || 0) * ballRadius * 0.5;
-      const shadowRadius = ballRadius * 1.1;
-      ctx.save();
-      ctx.translate(ballPos.x + shadowOffsetX, ballPos.y + shadowOffsetY);
-      const ballShadowGrad = ctx.createRadialGradient(
-        0,
-        0,
-        shadowRadius * 0.1,
-        0,
-        0,
-        shadowRadius
-      );
-      ballShadowGrad.addColorStop(0, 'rgba(0,0,0,0.4)');
-      ballShadowGrad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = ballShadowGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, shadowRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Ball body
-      ctx.translate(ballPos.x, ballPos.y);
-      const ballGrad = ctx.createRadialGradient(
-        -ballRadius * 0.5,
-        -ballRadius * 0.5,
-        ballRadius * 0.2,
-        0,
-        0,
-        ballRadius
-      );
-      ballGrad.addColorStop(0, '#ffe2ff');
-      ballGrad.addColorStop(0.3, '#ff4fdf');
-      ballGrad.addColorStop(0.7, '#5a0a64');
-      ballGrad.addColorStop(1, '#120016');
-
-      ctx.fillStyle = ballGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, ballRadius, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Small specular highlight
-      ctx.beginPath();
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.ellipse(
-        -ballRadius * 0.45,
-        -ballRadius * 0.5,
-        ballRadius * 0.28,
-        ballRadius * 0.18,
-        -0.5,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-      ctx.beginPath();
-      ctx.arc(0, 0, ballRadius, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.restore();
-
+      
+      // No rotation animation - ball stays in fixed orientation to prevent flickering
+      
+      // --- RENDER THREE.JS SCENE ---
+      renderer.render(scene, camera);
+      
+      // --- DRAW 2D TILT INDICATOR ---
+      if (overlayCanvas && overlayCtx) {
+        const pixelRatio = window.devicePixelRatio || 1;
+        const centerX = overlayCanvas.width / 2;
+        const centerY = overlayCanvas.height / 2;
+        
+        // Clear the overlay canvas
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        
+        // Draw tilt indicator line only if enabled
+        if (tiltIndicatorEnabled) {
+          const tiltMag = Math.hypot(tilt.x, tilt.y);
+          if (tiltMag > 0.001) {
+            // Calculate line direction from tilt vector
+            // tilt.x is left/right, tilt.y is forward/backward
+            // In screen coordinates: positive x = right, positive y = down
+            // We need to map tilt to screen coordinates
+            // Scale indicator length based on tilt magnitude (0 to 1)
+            // Clamp tiltMag to 1.0 maximum for consistent scaling
+            const clampedTiltMag = Math.min(tiltMag, 1.0);
+            const maxIndicatorLength = plateRadius * 0.35; // Maximum length when fully tilted
+            const indicatorLength = maxIndicatorLength * clampedTiltMag; // Scale with tilt
+            const lineThickness = 3 * pixelRatio; // Thickness of the line
+            
+            // Normalize tilt vector and scale to indicator length
+            const dirX = (tilt.x / tiltMag) * indicatorLength * pixelRatio;
+            const dirY = (tilt.y / tiltMag) * indicatorLength * pixelRatio;
+            
+            // Draw the line from center pointing in tilt direction
+            overlayCtx.strokeStyle = '#ffff00'; // Yellow color
+            overlayCtx.lineWidth = lineThickness;
+            overlayCtx.lineCap = 'round';
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(centerX, centerY);
+            overlayCtx.lineTo(centerX + dirX, centerY + dirY);
+            overlayCtx.stroke();
+          }
+        }
+      }
+      
       // Timer display (logic unchanged)
       timerDisplay.textContent = `Time: ${timeRemaining.toFixed(1)} s`;
     }
@@ -923,4 +1598,3 @@
   </script>
 </body>
 </html>
-
